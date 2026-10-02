@@ -199,21 +199,13 @@ Item {
 
   // ------------------------------------------------------------- bar room
   //
-  // The deck hangs from the top right corner, so it has to keep clear of the
-  // bar on exactly two of the four edges it could be on - and of neither if
-  // it is hidden. This used to assume a bar across the top and nothing else:
-  // a bar down the right ran straight through the cards, a bar at the bottom
-  // pushed them a bar's height down from a top edge with nothing on it, and a
-  // hidden bar still had room left for it.
-  readonly property var barRef: shell && shell.bar ? shell.bar : null
-  readonly property string barPosition: barRef ? String(barRef.position || "top") : "top"
-  readonly property bool barVertical: barPosition === "left" || barPosition === "right"
-  readonly property int barThickness: {
-    if (!barRef || barRef.barHidden) return 0
-    var size = Number(barRef.barSize || 0)
-    if (size > 0) return size
-    return barVertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
-  }
+  // The deck hangs from the top right corner and keeps clear of whatever
+  // reserves the screen's edges there: Omarchy's bar on any side, a second
+  // bar from a plugin, a dock. The deck's surface takes the compositor's
+  // usable area (exclusionMode Normal below), so it already starts past
+  // every exclusive zone and a hidden bar, which reserves none, leaves no
+  // room behind. Working the bar's size out by hand only ever covered
+  // Omarchy's own bar, and a sidebar on the right ran through the cards.
   readonly property int notificationWidth: Style.space(380)
   property int edgeSpacing: 12
   property bool showCountdown: false
@@ -314,10 +306,10 @@ Item {
     onTriggered: service.hyprRevision++
   }
 
-  // Clear the bar only on the edge it occupies; keep the configured gap on
+  // The surface already starts past the bars; keep the configured gap on
   // both edges of the top-right notification deck.
-  readonly property int barClearance: (barPosition === "top" ? barThickness : 0) + edgeSpacing
-  readonly property int edgeClearance: (barPosition === "right" ? barThickness : 0) + edgeSpacing
+  readonly property int barClearance: edgeSpacing
+  readonly property int edgeClearance: edgeSpacing
 
   readonly property int lowDuration: 5000
   readonly property int normalDuration: 8000
@@ -2307,7 +2299,9 @@ Item {
       // Escape closes it, so does answering, and so does the timeout below.
       WlrLayershell.keyboardFocus: surface.showingNotifications && service.replyingKey !== ""
                                    ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
-      exclusionMode: ExclusionMode.Ignore
+      // Normal: placed inside the area every exclusive zone leaves free, so
+      // the deck clears bars on any edge without knowing who drew them.
+      exclusionMode: ExclusionMode.Normal
 
       // As wide as the deck needs and no wider. Full-screen was the obvious
       // shape - the deck can sit anywhere in it - but it meant Qt re-rendering
@@ -2334,8 +2328,7 @@ Item {
         anchors.topMargin: service.barClearance
         anchors.rightMargin: 0
         readonly property int motionInset: Style.spacing.sm
-        // In from the screen's right edge - plus the bar's width, if the bar
-        // is the thing occupying that edge.
+        // In from the usable area's right edge.
         readonly property int edgeGap: service.edgeClearance
         width: service.notificationWidth + motionInset + edgeGap
         height: deck.y + deck.height + motionInset
