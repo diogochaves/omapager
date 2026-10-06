@@ -1886,6 +1886,12 @@ Item {
     }
   }
 
+  // The bar makes one indicator per monitor, and rebuilds every one of them
+  // when the layout changes - the new ones before the old ones are gone. Each
+  // carries the panel's IPC handler, so `omapager.panel` needs exactly one
+  // owner, or every rebuild logs a refused handler (Widget.qml).
+  property var panelOwner: null
+
   // ------------------------------------------------------------- store
   Process {
     id: storeProc

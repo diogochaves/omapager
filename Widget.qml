@@ -227,8 +227,31 @@ BarWidget {
   // Derived settings bindings may still hold the previous entry in the
   // settingsChanged handler. Apply after they settle, including config reloads.
   onSettingsChanged: Qt.callLater(applySettings)
-  onServiceChanged: Qt.callLater(applySettings)
-  Component.onCompleted: Qt.callLater(applySettings)
+  onServiceChanged: { Qt.callLater(applySettings); claimPanelIpc() }
+  Component.onCompleted: { Qt.callLater(applySettings); claimPanelIpc() }
+
+  // One indicator per monitor, and the bar rebuilds them all on a layout
+  // edit, the new ones before the old are gone: only the first live one
+  // answers `omapager.panel`, and the next takes over when it goes (the
+  // service's panelOwner). Otherwise every rebuild logs a refused handler.
+  property var ownerService: null
+  property bool leavingPanelIpc: false
+  readonly property bool ownsPanelIpc: !leavingPanelIpc && service !== null && service.panelOwner === pager
+  function claimPanelIpc() {
+    if (!service) return
+    ownerService = service
+    if (!service.panelOwner) service.panelOwner = pager
+  }
+  Connections {
+    target: pager.service
+    function onPanelOwnerChanged() { if (pager.service && !pager.service.panelOwner) pager.claimPanelIpc() }
+  }
+  // Unregister before handing over: the handler object outlives this signal,
+  // and a successor registering while it is still there is refused.
+  Component.onDestruction: {
+    leavingPanelIpc = true
+    if (ownerService && ownerService.panelOwner === pager) ownerService.panelOwner = null
+  }
 
   // ------------------------------------------------------------- looks
   readonly property color panelFg: bar ? bar.foreground : Color.foreground
@@ -401,6 +424,7 @@ BarWidget {
   // rather than `void` because this Qt's QML grammar rejects `void` outright.
   IpcHandler {
     target: "omapager.panel"
+    enabled: pager.ownsPanelIpc
     function open(): string { pager.open(); return "open" }
     function openSettings(): string { pager.openSettings(); return "settings" }
     // Current notification status for scripts, without opening the panel.

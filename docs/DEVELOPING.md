@@ -206,7 +206,7 @@ deck selection, stale open keys, animation overlap and the empty state.
 | | |
 | --- | --- |
 | `omapager` | the daemon |
-| `omapager.panel` | the panel |
+| `omapager.panel` | the panel. One indicator per monitor carries it, and the bar rebuilds them all on a layout edit (new before old), so only the service's `panelOwner` registers it |
 | `notifications` | **Omarchy's own**, answered here so the five stock `SUPER + ,` keybindings keep working when the built-in service is disabled. Names and return values are the built-in service's, not ours — do not rename them |
 
 ## State
