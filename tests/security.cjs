@@ -180,7 +180,7 @@ function newCapacityScope() {
         for (const field of changed) n[field + 'Changed'].emit();
       },
     };
-    for (const field of ['summary', 'body', 'appName', 'appIcon', 'image', 'urgency', 'expireTimeout', 'hints', 'actions'])
+    for (const field of ['summary', 'body', 'appName', 'appIcon', 'image', 'urgency', 'expireTimeout', 'hints', 'actions', 'hasInlineReply'])
       n[field + 'Changed'] = signal();
     return n;
   };
@@ -981,6 +981,62 @@ for (const u of ['https://example.com/', 'https://sub.example.co.uk/', 'https://
     ['/fixture/kdeconnect', 'reply', '/modules/kdeconnect/devices/x/notifications/7', 'on my way']);
   assert.equal(s.replyProc.replyKey, key);
   assert.equal(s.sendReply('missing', 'x'), false);
+}
+
+{ // The freedesktop inline reply: a sender offering `inline-reply` is answered
+  // with its own id, on screen or kept, and its inline-reply action is no button.
+  const s = newCapacityScope();
+  vm.runInContext(extract(source, 'function canReply(row)', '// ------------------------------------------------------------- offers'), s);
+  Object.assign(s, { helperSettingsReady: true, kdeBin: '/fixture/kdeconnect', replyProc: { running: false, replyKey: '', command: [] },
+                     replyQueue: [], findProc: { running: false } });
+  vm.runInContext(extract(source, 'function lookForReply(row)', 'function pumpReplies()'), s);
+  vm.runInContext('function pumpReplies() { pumped += 1 }; var pumped = 0', s);
+  s.popups = 'critical';
+  const offer = (id, summary) => {
+    const n = s.fakeNotification(id, summary);
+    n.hasInlineReply = true;
+    n.actions = [{ identifier: 'inline-reply', text: 'Reply' }, { identifier: 'read', text: 'Mark as read' }];
+    n.replies = [];
+    n.sendInlineReply = text => { n.replies.push(text); n.dismiss(); };
+    return n;
+  };
+  const chat = offer(1, 'Ana');
+  s.handleNotification(chat);
+  s.drainCallLater();
+  const key = s.keyForOriginal(1);
+  assert.equal(s.kept[key].inlineReply, true);
+  assert.equal(s.pumped, 0, 'no KDE Connect lookup for a sender that answers itself');
+  const entry = s.inboxListing().groups[0].items[0];
+  assert.equal(entry.repliable, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(entry.actions)), [{ id: 'read', text: 'Mark as read' }],
+    'the inline reply is the field, not a button');
+  assert.equal(s.sendReply(key, '  '), false, 'nothing to send');
+  assert.equal(s.sendReply(key, 'x'.repeat(4097)), false, 'bounded');
+  assert.equal(s.sendReply(key, 'on my way'), true);
+  assert.deepEqual(chat.replies, ['on my way'], 'told once, with the text as typed');
+  assert.equal(s.replyProc.command.length, 0, 'no helper');
+  assert.equal(s.kept[key], undefined, 'answered: it leaves the inbox');
+  assert.equal(s.liveKeys[key], undefined);
+  assert.equal(chat.closeAttempts, 1, 'closed exactly once');
+  // On screen too; a sender without the offer is not repliable inline.
+  s.popups = 'all';
+  const card = offer(2, 'Rui');
+  s.handleNotification(card);
+  s.drainCallLater();
+  const cardKey = s.keyForOriginal(2);
+  assert.equal(s.toasts.rows[0].inlineReply, true);
+  assert.equal(s.sendReply(cardKey, 'ok'), true);
+  assert.deepEqual(card.replies, ['ok']);
+  assert.equal(s.leaving[cardKey], 'activated', 'the card plays its exit');
+  const plainSender = s.fakeNotification(3, 'Build done');
+  s.handleNotification(plainSender);
+  s.drainCallLater();
+  const plainKey = s.keyForOriginal(3);
+  assert.equal(s.rowFor(plainKey).inlineReply, false);
+  assert.equal(s.canReply(s.rowFor(plainKey)), false);
+  assert.equal(s.sendReply(plainKey, 'hi'), false);
+  // A restored row has no sender to answer.
+  assert.equal(s.Store.sanitiseForPersistence({ key: 'r', inlineReply: true }).inlineReply, false);
 }
 
 { // One source's keys, on screen and kept, but not cards already leaving.

@@ -74,6 +74,9 @@ function snapshot(n, key, urgencyEnum) {
     codes: found.codes,
     replyPath: "",
     replyTo: "",
+    // The sender offers a freedesktop inline reply (its `inline-reply`
+    // action): the answer goes straight back to it, no helper involved.
+    inlineReply: n.hasInlineReply === true,
     link: found.link,
     meeting: found.meeting,
     phone: found.phone,
@@ -89,7 +92,7 @@ function snapshot(n, key, urgencyEnum) {
 var ROLES = ["originalId", "senderPid", "execArgv", "app", "appIcon", "summary", "body", "rawBody", "bodyRich",
              "bodyLine", "source", "groupKey", "image", "urgency",
              "expireTimeout", "duration", "ts",
-             "code", "codes", "link", "meeting", "phone", "replyPath", "replyTo"]
+             "code", "codes", "link", "meeting", "phone", "replyPath", "replyTo", "inlineReply"]
 
 function applyTo(model, index, row) {
   var current = model.get(index)
@@ -115,7 +118,7 @@ var RESTORE_GRACE = 20000     // 20s for a notification that outlived its sender
 var SHAPE = {
   key: "", originalId: 0, senderPid: 0, execArgv: "", app: "", appIcon: "", summary: "", body: "",
   bodyRich: "", bodyLine: "", rawBody: "", source: "", groupKey: "", image: "",
-  code: "", codes: "", link: "", meeting: false, phone: "", replyPath: "", replyTo: "",
+  code: "", codes: "", link: "", meeting: false, phone: "", replyPath: "", replyTo: "", inlineReply: false,
   stored_image: "", urgency: 1, expireTimeout: 0, duration: 0, ts: 0,
   restored: false
 }
@@ -252,7 +255,7 @@ function sanitiseForPersistence(row) {
     out.bodyLine = out.body
     out.bodyRich = out.body
   }
-  out.replyPath = ""; out.replyTo = ""; out.image = ""; out.stored_image = ""
+  out.replyPath = ""; out.replyTo = ""; out.inlineReply = false; out.image = ""; out.stored_image = ""
   out.execArgv = ""
   return out
 }

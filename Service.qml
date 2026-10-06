@@ -1259,7 +1259,7 @@ Item {
                    notification.appNameChanged, notification.appIconChanged,
                    notification.imageChanged, notification.urgencyChanged,
                    notification.expireTimeoutChanged, notification.hintsChanged,
-                   notification.actionsChanged]
+                   notification.actionsChanged, notification.hasInlineReplyChanged]
     for (var i = 0; i < signals.length; i++) signals[i].connect(schedule)
   }
 
@@ -1426,6 +1426,8 @@ Item {
       var a = ref.actions[i]
       var identifier = String(a.identifier || "")
       if (identifier.length > Security.MAX_ACTION_ID || !identifier) continue
+      // Answered through the reply field, never pressed as a button.
+      if (identifier === "inline-reply") continue
       if (identifier === "default") { out.push({id: identifier, text: "Open in app"}); continue }
       var label = Security.bounded(String(a.text || identifier), Security.MAX_ACTION_LABEL)
       if (hideSettingsAction && (/^settings$/i.test(label) || /^settings$/i.test(identifier)))
@@ -1686,10 +1688,18 @@ Item {
 
   // ------------------------------------------------------------- replying
   //
-  // A message forwarded from the phone can be answered from here. KDE Connect
-  // keeps an object per phone notification on its own bus carrying a replyId
-  // and a sendReply method - the part the freedesktop spec has no room for -
-  // and the helper matches our row to it by app name and text.
+  // Two ways to answer a notification from here.
+  //
+  // The freedesktop inline reply: a sender that put an `inline-reply` action
+  // on the wire (hasInlineReply) is answered through the server's
+  // NotificationReplied signal, with its own id. Exact, and any app can offer
+  // it. Like every signal it is seen by whoever listens on the session bus;
+  // the sender asked for it this way.
+  //
+  // A message forwarded from the phone can be answered too when KDE Connect
+  // does not offer the inline reply. It keeps an object per phone notification
+  // on its own bus carrying a replyId and a sendReply method, and the helper
+  // matches our row to it by app name and text.
   readonly property string kdeBin: Qt.resolvedUrl("bin/omapager-run-kdeconnect")
                                      .toString().replace(/^file:\/\//, "")
   property string replyingKey: ""        // the card with its reply box open
@@ -1759,6 +1769,7 @@ Item {
   property var replyQueue: []
 
   function lookForReply(row) {
+    if (row.inlineReply === true) return
     if (!/kde\s*connect/i.test(String(row.app || ""))) return
     var queue = replyQueue.slice()
     queue.push({ key: String(row.key || ""), source: String(row.source || ""),
@@ -1783,15 +1794,31 @@ Item {
     onTriggered: service.pumpReplies()
   }
 
+  function canReply(row) { return Inbox.canReply(row) }
+
   function sendReply(key, text) {
     var row = rowFor(key)
     if (!row) return false
+    if (row.inlineReply === true) return sendInlineReply(key, text)
     var path = String(row.replyPath || "")
     if (!helperSettingsReady || !path || !String(text).trim() || String(text).length > 4096 || replyProc.running) return false
     replyProc.running = false
     replyProc.replyKey = key
     replyProc.command = [kdeBin, "reply", path, String(text), String(row.source), String(row.bodyLine)]
     replyProc.running = true
+    return true
+  }
+
+  // The sender is told first, then the card goes as answered. A sender that
+  // is not resident is closed by Quickshell as it is told; the card or the
+  // kept row then goes the usual way, and closing it again is a no-op.
+  function sendInlineReply(key, text) {
+    var ref = refs[key]
+    var value = String(text)
+    if (!ref || ref.hasInlineReply !== true || !value.trim() || value.length > 4096) return false
+    try { ref.sendInlineReply(value) } catch (e) { return false }
+    if (replyingKey === key) replyingKey = ""
+    closeToast(key, "activated")
     return true
   }
 
@@ -2173,6 +2200,10 @@ Item {
     bodyMarkupSupported: true
     bodyHyperlinksSupported: true
     persistenceSupported: true
+    // The freedesktop inline reply: a sender that offers an `inline-reply`
+    // action gets the typed answer back as NotificationReplied, the way
+    // KDE Connect, Telegram or Fractal ask for it (Notification.hasInlineReply).
+    inlineReplySupported: true
 
     onNotification: function(notification) { service.handleNotification(notification) }
   }
@@ -2318,7 +2349,7 @@ Item {
     function reply(text: string): string {
       if (toasts.count === 0) return "nothing"
       var key = String(toasts.get(0).key)
-      if (!String(toasts.get(0).replyPath || "")) return "not repliable"
+      if (!service.canReply(toasts.get(0))) return "not repliable"
       if (!String(text || "").trim()) {
         service.replyingKey = key
         service.pointerEntered(Layout.deckKeyFor(toasts.get(0), service.stacking))
@@ -2392,7 +2423,7 @@ Item {
       service.listened = true
       var row = service.rowFor(String(key || ""))
       if (!row) return "none"
-      if (!String(row.replyPath || "")) return "not repliable"
+      if (!service.canReply(row)) return "not repliable"
       if (!String(text || "").trim()) return "empty"
       return service.sendReply(String(key), String(text)) ? "sent" : "busy"
     }

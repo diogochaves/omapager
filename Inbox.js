@@ -70,6 +70,12 @@ function text(value, max) {
   return String(value === undefined || value === null ? "" : value).slice(0, max)
 }
 
+// Whether a row can be answered: the sender offers an inline reply, or KDE
+// Connect's helper found the phone message behind it.
+function canReply(row) {
+  return !!row && (row.inlineReply === true || String(row.replyPath || "") !== "")
+}
+
 // One notification as the IPC describes it. `place` is "screen" for a card
 // that is drawn, "kept" for one held for someone else to show.
 function entry(row, actions, place) {
@@ -89,7 +95,7 @@ function entry(row, actions, place) {
     urgency: Number(row.urgency) || 0,
     place: place === "kept" ? "kept" : "screen",
     restored: row.restored === true,
-    repliable: String(row.replyPath || "") !== "",
+    repliable: canReply(row),
     replyTo: text(row.replyTo, 256),
     actions: list
   }

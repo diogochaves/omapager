@@ -41,8 +41,9 @@ open links, directly from a notification. Multiple codes get separate buttons.
 **Per-notification actions.** Use app-provided actions such as Mark as read
 without opening the app.
 
-**Inline replies.** Reply to supported KDE Connect messages without leaving the
-notification.
+**Inline replies.** Reply without leaving the notification, to any app that
+offers the freedesktop inline reply (its `inline-reply` action; the answer goes
+back as `NotificationReplied`), and to supported KDE Connect messages.
 
 <img src="assets/reply.png" width="410" alt="Local reply demo using Seif Lotfy's original message, a WhatsApp icon and the native reply field">
 
@@ -445,7 +446,8 @@ vulnerability.
   image files. Without it, sender files fall back to local theme icons.
 - Bubblewrap, packaged as `bubblewrap`, is optional unless `requireSandbox` is on.
 - `wl-clipboard` is recommended for sensitive clipboard handling.
-- KDE Connect and its phone app are required for phone notifications and replies.
+- KDE Connect and its phone app are required for phone notifications, and for
+  replies to them when KDE Connect does not offer the inline reply itself.
 
 See [Security](#security) for icon-fetching and sandbox behaviour.
 

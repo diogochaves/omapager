@@ -92,6 +92,9 @@ Item {
   // Every code the body carried, not just the first. One is the normal case
   // and says "Copy code"; two or more have to say which, because "Copy code"
   // twice is a coin toss.
+  // The sender's own inline reply, or KDE Connect's phone message behind it.
+  readonly property bool repliable: row.inlineReply === true || String(row.replyPath || "") !== ""
+
   readonly property var foundCodes: {
     var all = String(row.codes || row.code || "").split(" ")
     var out = []
@@ -109,12 +112,12 @@ Item {
                  label: row.meeting ? "Join" : "Open link", value: String(row.link) })
     if (String(row.phone || ""))
       out.push({ kind: "phone", label: "Copy number", value: String(row.phone) })
-    if (String(row.replyPath || ""))
+    if (repliable)
       out.push({ kind: "reply", label: "Reply", value: "" })
     for (var i = 0; i < actions.length; i++) {
       // The phone's own "Reply" action opens a window somewhere else; ours
       // types the answer here, so it wins and the duplicate is dropped.
-      if (String(row.replyPath || "") && /^reply$/i.test(String(actions[i].text || "")))
+      if (repliable && /^reply$/i.test(String(actions[i].text || "")))
         continue
       out.push({ kind: "action", label: String(actions[i].text || ""), value: String(actions[i].id) })
     }
