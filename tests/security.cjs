@@ -932,6 +932,24 @@ for (const u of ['https://example.com/', 'https://sub.example.co.uk/', 'https://
   }
 }
 
+{ // A kept notification can be answered: the reply reads the kept row.
+  const s = newCapacityScope();
+  vm.runInContext(extract(source, 'function sendReply(key, text)', '// ------------------------------------------------------------- offers'), s);
+  Object.assign(s, { helperSettingsReady: true, kdeBin: '/fixture/kdeconnect', replyProc: { running: false, replyKey: '', command: [] } });
+  s.popups = 'critical';
+  s.handleNotification(s.fakeNotification(1, 'Ana'));
+  s.drainCallLater();
+  const key = s.keyForOriginal(1);
+  assert.equal(s.sendReply(key, 'on my way'), false, 'not repliable until the phone side is found');
+  s.setRowField(key, 'replyPath', '/modules/kdeconnect/devices/x/notifications/7');
+  assert.equal(s.sendReply(key, '   '), false, 'nothing to send');
+  assert.equal(s.sendReply(key, 'on my way'), true);
+  assert.deepEqual(Array.from(s.replyProc.command.slice(0, 4)),
+    ['/fixture/kdeconnect', 'reply', '/modules/kdeconnect/devices/x/notifications/7', 'on my way']);
+  assert.equal(s.replyProc.replyKey, key);
+  assert.equal(s.sendReply('missing', 'x'), false);
+}
+
 { // One source's keys, on screen and kept, but not cards already leaving.
   const s = newCapacityScope();
   s.handleNotification(s.fakeNotification(1, 'one'));
