@@ -134,8 +134,45 @@ function listing(state) {
     snoozed: Array.isArray(s.snoozed) ? s.snoozed : [],
     sharing: { active: s.sharingActive === true, offer: s.sharingOfferPending === true,
                minutes: SHARING_MINUTES.slice() },
+    snooze: { choices: snoozeChoices(s.snoozeChoices), wakeHour: wakeHour(s.wakeHour) },
     groups: groups(s.entries, s.snoozedUntil)
   }
+}
+
+// ---- snoozing a source -----------------------------------------------------
+//
+// The choices are the widget's `snoozeDurations`: minutes, or the literal
+// "tomorrow", which is a time rather than a duration - the wake hour
+// (`wakeHour`) of the next day. `list` hands both out, so a program offering
+// "snooze" offers the user's own choices, and `snooze <group> <choice>` takes
+// any of them back, worked out by the service's snoozeOption against the
+// clock at that moment.
+var SNOOZE_CHOICES = ["30", "60", "240", "tomorrow"]
+var WAKE_HOUR = 8
+
+// One choice as `list` names it - "30", "tomorrow" - or "" for none.
+function snoozeChoice(value) {
+  var v = String(value === undefined || value === null ? "" : value).trim().toLowerCase()
+  if (v === "tomorrow") return v
+  if (!/^\d{1,5}$/.test(v)) return ""
+  var minutes = Number(v)
+  return minutes > 0 && minutes <= 10080 ? String(minutes) : ""
+}
+
+// The configured choices, cleaned; the defaults when none survive, the way the
+// panel never offers an empty menu.
+function snoozeChoices(list) {
+  var out = []
+  for (var i = 0; i < (Array.isArray(list) ? list.length : 0); i++) {
+    var c = snoozeChoice(list[i])
+    if (c && out.indexOf(c) < 0) out.push(c)
+  }
+  return out.length ? out : SNOOZE_CHOICES.slice()
+}
+
+function wakeHour(value) {
+  var h = Number(value)
+  return isFinite(h) && h >= 0 && h <= 23 && value !== "" && value !== null ? Math.floor(h) : WAKE_HOUR
 }
 
 // The screen-sharing offer's choices, as the panel offers them.

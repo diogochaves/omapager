@@ -130,7 +130,7 @@ function newCapacityScope() {
     Inbox: load('Inbox'), Layout: load('Layout'), dispatched: [],
     popups: 'all', kept: {}, keptRevision: 0, keptLimit: 50, listened: false,
     sharingActive: false, sharingOfferPending: false,
-    snoozeRevision: 0, snoozes: {},
+    snoozeRevision: 0, snoozes: {}, snoozeChoices: ['30', '60', '240', 'tomorrow'], wakeHour: 8,
     codesBypassQuiet: false, hideSettingsAction: false,
     lowDuration: 5000, normalDuration: 8000, maxDuration: 30000,
     snoozedUntil: key => s.snoozes[key] || 0,
@@ -930,6 +930,39 @@ for (const u of ['https://example.com/', 'https://sub.example.co.uk/', 'https://
     assert.deepEqual(Array.from(argv.slice(0, 2)), ['hyprctl', 'dispatch']);
     assert.ok(!argv[2].includes('938271'));
   }
+}
+
+{ // `snooze <group> <choice>` over the IPC: minutes, or "tomorrow" worked out
+  // by snoozeOption, as the panel's menu does; anything else is refused, never
+  // an hour by default.
+  const s = newCapacityScope();
+  vm.runInContext(extract(source, 'function shortWords(minutes)', 'readonly property var snoozeOptions'), s);
+  vm.runInContext('function durationWords(m) { return String(m) }', s);
+  vm.runInContext(extract(source, 'function snooze(group: string, choice: string): string', 'function wake(group: string)')
+    .replace('(group: string, choice: string): string', '(group, choice)'), s);
+  const asked = [];
+  s.service = s;
+  s.snoozeSource = (group, label, seconds) => { asked.push([group, label, seconds]); return 2000000000; };
+  s.handleNotification(s.fakeNotification(1, 'Ana'));
+  s.drainCallLater();
+  const group = s.rowFor(s.keyForOriginal(1)).groupKey;
+  assert.equal(s.snooze(group, '30'), '2000000000');
+  assert.deepEqual(asked.pop().slice(2), [1800]);
+  assert.equal(s.snooze(group, 'tomorrow'), '2000000000');
+  const seconds = asked.pop()[2];
+  const wake = new Date(); wake.setDate(wake.getDate() + 1); wake.setHours(8, 0, 0, 0);
+  assert.ok(Math.abs(seconds - Math.max(600, (wake.getTime() - Date.now()) / 1000)) < 5, 'until 8:00 tomorrow');
+  s.wakeHour = 6;
+  s.snooze(group, 'tomorrow');
+  wake.setHours(6, 0, 0, 0);
+  assert.ok(Math.abs(asked.pop()[2] - Math.max(600, (wake.getTime() - Date.now()) / 1000)) < 5, 'the wake hour set');
+  for (const bad of ['', 'soon', '-5', '0', '1.5', 'tomorrow;rm'])
+    assert.equal(s.snooze(group, bad), 'refused', JSON.stringify(bad));
+  assert.equal(asked.length, 0, 'nothing snoozed on a refusal');
+  assert.equal(s.snooze('', '30'), 'none');
+  // And `list` names the choices and the wake hour it works them out with.
+  s.snoozeChoices = ['15', 'tomorrow'];
+  assert.deepEqual(JSON.parse(JSON.stringify(s.inboxListing().snooze)), { choices: ['15', 'tomorrow'], wakeHour: 6 });
 }
 
 { // A kept notification can be answered: the reply reads the kept row.

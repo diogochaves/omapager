@@ -334,11 +334,16 @@ omarchy-shell omapager.inbox dismiss KEY        one notification
 omarchy-shell omapager.inbox dismissSource GROUP  everything from one source
 omarchy-shell omapager.inbox act KEY ID         a sender's action ("open": what a click does)
 omarchy-shell omapager.inbox reply KEY "text"   answer a repliable one
-omarchy-shell omapager.inbox snooze GROUP 60    quieten a source for 60 minutes
+omarchy-shell omapager.inbox snooze GROUP 60    quieten a source for 60 minutes ("tomorrow": until the wake hour)
 omarchy-shell omapager.inbox wake GROUP         wake it
 omarchy-shell omapager.inbox popups critical    critical | all | default (the setting)
 omarchy-shell omapager.inbox sharing 60         take the screen-sharing offer (30|60|240|dismiss)
 ```
+
+`list` also says how snoozing is set up, `snooze: { choices, wakeHour }`:
+the choices are `snoozeDurations` (minutes, or `"tomorrow"`) and `wakeHour`
+is when tomorrow starts, so a program can offer the same choices as the
+panel. `snooze` takes any of them back and refuses anything else.
 
 Once something has called it, omapager posts a Hyprland event when the set
 changes: `custom>>omapager>>arrived,KEY`, `left,KEY,REASON`, `changed`

@@ -2038,7 +2038,7 @@ Item {
     return Inbox.listing({
       popups: popups, dnd: doNotDisturb, globalSnoozeUntil: globalSnoozeUntil,
       snoozed: liveSnoozes(), sharingActive: sharingActive, sharingOfferPending: sharingOfferPending,
-      entries: entries, snoozedUntil: function(groupKey) { return snoozedUntil(groupKey) }
+      snoozeChoices: snoozeChoices, wakeHour: wakeHour, entries: entries, snoozedUntil: function(groupKey) { return snoozedUntil(groupKey) }
     })
   }
 
@@ -2345,7 +2345,8 @@ Item {
   IpcHandler {
     target: "omapager.inbox"
 
-    // {schema, popups, dnd, globalSnoozeUntil, snoozed, sharing, groups:
+    // {schema, popups, dnd, globalSnoozeUntil, snoozed, sharing, snooze:
+    // {choices, wakeHour}, groups:
     // [{key, label, app, count, at, snoozedUntil, items: [{key, group, app,
     // source, summary, body, at, urgency, place, restored, repliable,
     // replyTo, actions: [{id, text}]}]}]}, newest first (Inbox.js).
@@ -2396,16 +2397,20 @@ Item {
       return service.sendReply(String(key), String(text)) ? "sent" : "busy"
     }
 
-    // Snooze one source for so many minutes from now (60 when not a number).
-    // Answers when it wakes, in epoch seconds.
-    function snooze(group: string, minutes: string): string {
+    // Snooze one source from now: so many minutes, or "tomorrow" (until the
+    // wake hour), as `list`'s `snooze.choices` name them and the panel's menu
+    // works them out. Answers when it wakes, in epoch seconds; "refused" for
+    // anything that is not a choice of that kind.
+    function snooze(group: string, choice: string): string {
       service.listened = true
       var g = String(group || "")
       if (!g) return "none"
+      var c = Inbox.snoozeChoice(choice)
+      var option = c ? service.snoozeOption(c) : null
+      if (!option) return "refused"
       var keys = service.keysOfGroup(g), row = keys.length ? service.rowFor(keys[0]) : null
       var label = row ? String(row.source || row.app || g) : g
-      var mins = Number(minutes) > 0 ? Number(minutes) : 60
-      var until = service.snoozeSource(g, label, mins * 60, true)
+      var until = service.snoozeSource(g, label, option.seconds, true)
       return until ? String(Math.round(until)) : "no"
     }
 
