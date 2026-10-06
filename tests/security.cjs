@@ -104,6 +104,7 @@ const capacitySource = [
   extract(source, 'function releaseHeld()', '// Nothing waits forever'),
   extract(source, 'function restoreRows(rows, replay)', '\n  Process {'),
   extract(source, 'function actionsOf(key, revision)', 'function invokeAction(key, identifier)'),
+  extract(source, 'function popsUp(row)', "// (the inbox's functions end here)"),
 ].join('\n');
 
 function newCapacityScope() {
@@ -123,7 +124,12 @@ function newCapacityScope() {
     configuredDisplayName: 'fixture-display', deckDisplayName: '',
     fullscreenAway: false, fullscreenScope: '', hyprRevision: 0,
     displayNames: ['fixture-display'], focusedDisplayName: 'fixture-display',
-    Quickshell: { screens: [] }, Hyprland: { monitorFor: screen => screen.monitor },
+    Quickshell: { screens: [], execDetached: argv => s.dispatched.push(argv) },
+    Hyprland: { monitorFor: screen => screen.monitor },
+    // The inbox (popups = critical keeps rows instead of drawing them).
+    Inbox: load('Inbox'), Layout: load('Layout'), dispatched: [],
+    popups: 'all', kept: {}, keptRevision: 0, keptLimit: 50, listened: false,
+    sharingActive: false, sharingOfferPending: false,
     snoozeRevision: 0, snoozes: {},
     codesBypassQuiet: false, hideSettingsAction: false,
     lowDuration: 5000, normalDuration: 8000, maxDuration: 30000,
@@ -809,6 +815,134 @@ for (const u of ['https://example.com/', 'https://sub.example.co.uk/', 'https://
     hints: { 'omarchy-exec-argv': shot }
   }, 'slack', { Normal: 1 });
   assert.equal(slack.execArgv, '');
+}
+
+{ // popups = critical: only critical notifications get a card; the rest are
+  // kept, whole (sender, actions), and never expire on their own.
+  const s = newCapacityScope();
+  s.popups = 'critical';
+  const chat = s.fakeNotification(1, 'Ana: lunch?');
+  const alarm = s.fakeNotification(2, 'Disk full', 2);
+  s.handleNotification(chat);
+  s.handleNotification(alarm);
+  s.drainCallLater();
+  const chatKey = s.keyForOriginal(1), alarmKey = s.keyForOriginal(2);
+  assert.deepEqual(s.toasts.rows.map(row => row.key), [alarmKey], 'only the critical one is drawn');
+  assert.deepEqual(Object.keys(s.kept), [chatKey]);
+  assert.equal(s.rowFor(chatKey).summary, 'Ana: lunch?');
+  assert.deepEqual(JSON.parse(JSON.stringify(s.actionsOf(chatKey, 0))), [{ id: 'open', text: 'Ana: lunch?' }],
+    'a kept row keeps its sender');
+  assert.equal(chat.closeAttempts, 0);
+  // An update to a kept row stays kept, in place.
+  chat.replace({ summary: 'Ana: lunch at 1?' });
+  s.drainCallLater();
+  assert.equal(s.toasts.count, 1);
+  assert.equal(s.kept[chatKey].summary, 'Ana: lunch at 1?');
+  // The listing has both, grouped, newest first.
+  const listing = s.inboxListing();
+  assert.equal(listing.popups, 'critical');
+  const places = Array.from(listing.groups.flatMap(g => g.items.map(i => i.place))).sort();
+  assert.deepEqual(places, ['kept', 'screen']);
+  // Dismissing a kept row closes its sender exactly once and frees the slot.
+  s.closeToast(chatKey, 'dismissed');
+  assert.equal(chat.dismissals, 1);
+  assert.equal(chat.closeAttempts, 1);
+  assert.equal(s.kept[chatKey], undefined);
+  assert.equal(s.liveKeys[chatKey], undefined);
+}
+
+{ // A sender withdrawing a kept notification takes it out of the inbox.
+  const s = newCapacityScope();
+  s.popups = 'critical';
+  const n = s.fakeNotification(1, 'Build finished');
+  s.handleNotification(n);
+  s.drainCallLater();
+  const key = s.keyForOriginal(1);
+  assert.ok(s.kept[key]);
+  n.closed.emit();
+  assert.equal(s.kept[key], undefined);
+  assert.equal(s.liveKeys[key], undefined);
+}
+
+{ // Switching modes: critical sweeps the cards into the inbox without closing
+  // anything; all hands them back as cards, oldest first.
+  const s = newCapacityScope();
+  const senders = [1, 2].map(id => s.fakeNotification(id, 'Message ' + id));
+  for (const sender of senders) { s.handleNotification(sender); s.drainCallLater(); s.toasts.rows[0].ts = sender.id; }
+  s.rows = s.toasts.rows.map(row => row.key);
+  s.popups = 'critical';
+  s.applyPopups();
+  for (const key of s.rows) assert.equal(s.leaving[key], 'kept');
+  for (const key of s.rows) s.finishClose(key, 'kept');
+  assert.equal(s.toasts.count, 0);
+  assert.equal(Object.keys(s.kept).length, 2);
+  for (const sender of senders) assert.equal(sender.closeAttempts, 0, 'swept, not closed');
+  s.popups = 'all';
+  s.applyPopups();
+  s.drainCallLater();
+  assert.equal(Object.keys(s.kept).length, 0);
+  assert.deepEqual(s.toasts.rows.map(row => row.summary), ['Message 2', 'Message 1']);
+}
+
+{ // Kept rows are bounded: the oldest go to history as expired.
+  const s = newCapacityScope();
+  s.popups = 'critical';
+  s.keptLimit = 3;
+  const senders = [1, 2, 3, 4, 5].map(id => s.fakeNotification(id, 'Note ' + id));
+  for (const [i, sender] of senders.entries()) {
+    s.handleNotification(sender);
+    s.drainCallLater();
+    s.kept[s.keyForOriginal(i + 1)].ts = i + 1;
+  }
+  assert.equal(Object.keys(s.kept).length, 3);
+  assert.deepEqual(senders.map(n => n.expiries), [1, 1, 0, 0, 0]);
+}
+
+{ // A restart's leftovers follow the mode; a replay is always drawn.
+  const s = newCapacityScope();
+  s.popups = 'critical';
+  s.restoreRows([{ key: 'old1', summary: 'Left over' }, { key: 'old2', summary: 'Alarm', urgency: 2 }], false);
+  s.drainCallLater();
+  assert.deepEqual(Object.keys(s.kept), ['old1']);
+  assert.deepEqual(s.toasts.rows.map(row => row.key), ['old2']);
+  s.restoreRows([{ key: 'old3', summary: 'Replayed' }], true);
+  s.drainCallLater();
+  assert.ok(s.toasts.rows.some(row => row.summary === 'Replayed'));
+}
+
+{ // Events: nothing until something has listed; then one-line nudges with a
+  // key and a reason, never the text.
+  const s = newCapacityScope();
+  const first = s.fakeNotification(1, 'Secret 938271');
+  s.handleNotification(first);
+  s.drainCallLater();
+  assert.equal(s.dispatched.length, 0);
+  s.listened = true;
+  s.handleNotification(s.fakeNotification(2, 'Secret 938271'));
+  s.drainCallLater();
+  const key = s.keyForOriginal(2);
+  s.closeToast(key, 'dismissed');
+  s.finishClose(key, s.leaving[key]);
+  const lines = s.dispatched.map(argv => argv[2]);
+  assert.deepEqual(lines, ['hl.dsp.event("omapager>>arrived,' + key + '")',
+                           'hl.dsp.event("omapager>>left,' + key + ',dismissed")']);
+  for (const argv of s.dispatched) {
+    assert.deepEqual(Array.from(argv.slice(0, 2)), ['hyprctl', 'dispatch']);
+    assert.ok(!argv[2].includes('938271'));
+  }
+}
+
+{ // One source's keys, on screen and kept, but not cards already leaving.
+  const s = newCapacityScope();
+  s.handleNotification(s.fakeNotification(1, 'one'));
+  s.drainCallLater();
+  s.popups = 'critical';
+  s.handleNotification(s.fakeNotification(2, 'two'));
+  s.drainCallLater();
+  const group = s.rowFor(s.keyForOriginal(1)).groupKey;
+  assert.equal(s.keysOfGroup(group).length, 2);
+  s.closeToast(s.keyForOriginal(1), 'dismissed');
+  assert.deepEqual(Array.from(s.keysOfGroup(group)), [s.keyForOriginal(2)]);
 }
 
 console.log('security JS: passed');

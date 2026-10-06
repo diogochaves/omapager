@@ -57,7 +57,8 @@
       "allowDefaultActionOnCardClick": false,
       "historyHours": 24,
       "clipboardTimeout": 60,
-      "fontScale": 100
+      "fontScale": 100,
+      "popups": "all"
     },
     "schema": [
       {
@@ -81,6 +82,17 @@
         ],
         "defaultValue": "right",
         "description": "Align action buttons to the left or right."
+      },
+      {
+        "key": "popups",
+        "type": "enum",
+        "label": "Notification cards",
+        "options": [
+          "all",
+          "critical"
+        ],
+        "defaultValue": "all",
+        "description": "Draw a card for every notification, or only for critical ones and keep the rest, unexpired, for another program to show through omapager.inbox."
       },
       {
         "key": "showCountdown",

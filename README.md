@@ -165,6 +165,7 @@ below apply to new configurations, not choices you have already saved.
 | `offerSnoozeWhenSharing` | `true` | Suggest a timed snooze when portal sharing starts. Never mute automatically. |
 | `fontScale` | `100` | Notification text size as a percentage, from 75 to 200. Does not resize bar or panel text. |
 | `actionsAlign` | `right` | Align action buttons to the `right` or `left`. |
+| `popups` | `all` | `critical` draws only critical notifications and keeps the rest for another program to show ("Showing notifications somewhere else"). |
 | `hideSettingsAction` | `true` | Hide the browser's repeated Settings action. |
 | `snoozeDurations` | `30, 60, 240, tomorrow` | Offer `15`, `30`, `60`, `120`, `240` or `480` minutes, or `tomorrow`. An empty selection uses the defaults. |
 | `wakeHour` | `8` | Wake hour for `tomorrow`, from 0 to 23. Currently `0` falls back to `8`. |
@@ -316,6 +317,34 @@ omarchy-shell omapager.panel toggle     the panel
 omarchy-shell omapager.panel expand x   open a source's held list, as clicking it would
 omarchy-shell omapager.panel openSettings  notification preferences
 ```
+
+### Showing notifications somewhere else
+
+A program that draws notifications itself (a status bar, a console) can keep
+omapager as the daemon underneath. With `popups` set to `critical` (the
+setting, or `omapager.inbox popups critical` for the session), only critical
+notifications get a card; the rest are *kept*: recorded and actionable like
+any card, never drawn, never expired (the oldest past 50 go to history),
+until they are dismissed. Switching back to `all` turns what was kept into
+cards. `omapager.inbox` works by key, on cards and kept notifications alike:
+
+```
+omarchy-shell omapager.inbox list               everything held, grouped by source, as JSON
+omarchy-shell omapager.inbox dismiss KEY        one notification
+omarchy-shell omapager.inbox dismissSource GROUP  everything from one source
+omarchy-shell omapager.inbox act KEY ID         a sender's action ("open": what a click does)
+omarchy-shell omapager.inbox reply KEY "text"   answer a repliable one
+omarchy-shell omapager.inbox snooze GROUP 60    quieten a source for 60 minutes
+omarchy-shell omapager.inbox wake GROUP         wake it
+omarchy-shell omapager.inbox popups critical    critical | all | default (the setting)
+omarchy-shell omapager.inbox sharing 60         take the screen-sharing offer (30|60|240|dismiss)
+```
+
+Once something has called it, omapager posts a Hyprland event when the set
+changes: `custom>>omapager>>arrived,KEY`, `left,KEY,REASON`, `changed`
+(snoozes, silencing, the sharing offer), and `ready` after every start. The
+events carry no notification text, since every process in the session can
+read the event socket; `list` is where the text is.
 
 ## Demo
 

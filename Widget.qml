@@ -221,6 +221,7 @@ BarWidget {
     service.displayName = configuredDisplayName
     service.displayMode = configuredDisplayMode
     service.offerSnoozeWhenSharing = configuredOfferSnoozeWhenSharing
+    service.popupsSetting = String(setting("popups", "all"))
     service.helperSettingsReady = true
   }
 

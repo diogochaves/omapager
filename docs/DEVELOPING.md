@@ -207,6 +207,7 @@ deck selection, stale open keys, animation overlap and the empty state.
 | --- | --- |
 | `omapager` | the daemon |
 | `omapager.panel` | the panel. One indicator per monitor carries it, and the bar rebuilds them all on a layout edit (new before old), so only the service's `panelOwner` registers it |
+| `omapager.inbox` | everything held, by key, for a program that shows notifications itself; `popups = critical` keeps non-critical ones instead of drawing them (README, "Showing notifications somewhere else"; the shape is `Inbox.js`, tested by `node tests/inbox.cjs`) |
 | `notifications` | **Omarchy's own**, answered here so the five stock `SUPER + ,` keybindings keep working when the built-in service is disabled. Names and return values are the built-in service's, not ours — do not rename them |
 
 ## State
@@ -319,7 +320,7 @@ Auto mode prefers operational Bubblewrap, then direct execution if its preflight
 is unavailable. Required mode fails closed. Never replay a failed actual helper
 directly. Remote icons are automatic by default, use the pinned HTTPS transport,
 and require Pillow validation in either mode. Tests use synthetic data only.
-Run `node tests/baseline.cjs`, `node tests/security.cjs`,
+Run `node tests/baseline.cjs`, `node tests/security.cjs`, `node tests/inbox.cjs`,
 Python unittest discovery, Qt policy tests and `security/check_invariants.py`
 after changes. See `docs/VALIDATION.md` for exact commands and integration
 limits.

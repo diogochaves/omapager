@@ -21,6 +21,7 @@ import "Store.js" as Store
 import "Security.js" as Security
 import "Layout.js" as Layout
 import "Markup.js" as Markup
+import "Inbox.js" as Inbox
 
 Item {
   id: service
@@ -449,6 +450,9 @@ Item {
       var row = toasts.get(i)
       if (String(row.groupKey || "") === key) keys.push(row.key)
     }
+    // And whatever of it was kept for the inbox: the same request.
+    for (var keptKey in kept)
+      if (String(kept[keptKey].groupKey || "") === key) keys.push(keptKey)
     for (var j = 0; j < keys.length; j++) closeToast(keys[j], "snoozed")
     return next[key].until
   }
@@ -1186,6 +1190,8 @@ Item {
       Store.write(storeProc, storeBin, "put", row)
       Store.write(storeProc, storeBin, "close", null, [key, muted])
       release(key)
+      // A kept row replaced by a now-quietened version leaves the inbox too.
+      if (dropKept(key)) announce("left", key, "snoozed")
       if (rowIndexFor(key) < 0) releaseLive(key)
       else liveKeys[key].row = null
       return
@@ -1195,6 +1201,15 @@ Item {
     wantSenderImage(row)
     wantIcon(row)
     lookForReply(row)
+    announce("arrived", key)
+
+    // Not drawn: kept for whoever shows notifications instead (popups =
+    // critical). An update to a kept row stays kept; one already on screen
+    // is updated where it is.
+    if (kept[key] || (rowIndexFor(key) < 0 && !popsUp(row))) {
+      keepRow(row)
+      return
+    }
 
     // An update to something already on screen goes through either way: it
     // changes a card in place rather than moving anything. Only a genuinely
@@ -1345,12 +1360,26 @@ Item {
     leaving = rest
     var at = rowIndexFor(key)
     if (!liveKeys[key]) return
+    // Swept off the screen into the inbox (popups turned to critical): the
+    // card goes, the notification stays - sender, actions, store entry.
+    if (reason === "kept") {
+      if (at >= 0) {
+        var row = Store.normalise(toasts.get(at))
+        toasts.remove(at)
+        delete heights[key]
+        layoutRevision += 1
+        keepRow(row)
+      }
+      return
+    }
     releaseLive(key)
     release(key, reason)
     if (at >= 0) toasts.remove(at)
+    dropKept(key)
     delete heights[key]
     Store.write(storeProc, storeBin, "close", null, [key, reason])
     layoutRevision += 1        // the row is gone; nothing moves, the gap already closed
+    announce("left", key, reason)
   }
 
   function clearAll(reason) {
@@ -1612,8 +1641,7 @@ Item {
   }
 
   function activate(key) {
-    var at = rowIndexFor(key)
-    var row = at >= 0 ? toasts.get(at) : null
+    var row = rowFor(key)
     var argv = Security.parseOmarchyExecArgv(row ? row.execArgv : "")
     if (argv) {
       runExecArgv(argv)
@@ -1703,11 +1731,14 @@ Item {
           path = String(found.path || "")
           who = String(found.title || "")
         } catch (e) {}
-        var at = service.rowIndexFor(String(job.key || ""))
-        if (path && at >= 0) {
-          toasts.setProperty(at, "replyPath", path)
-          if (who) toasts.setProperty(at, "replyTo", who)
-        } else if (!path && at >= 0 && (job.tries || 0) < 1) {
+        // On screen or kept: a kept row can be answered from the inbox.
+        var key = String(job.key || "")
+        var known = service.rowFor(key) !== null
+        if (path && known) {
+          service.setRowField(key, "replyPath", path)
+          if (who) service.setRowField(key, "replyTo", who)
+          service.announce("changed")
+        } else if (!path && known && (job.tries || 0) < 1) {
           // Nothing yet. Once more in a moment, in case the phone's side of it
           // had not appeared when we looked.
           job.tries = (job.tries || 0) + 1
@@ -1753,15 +1784,15 @@ Item {
   }
 
   function sendReply(key, text) {
-    var at = rowIndexFor(key)
-    if (at < 0) return
-    var path = String(toasts.get(at).replyPath || "")
-    if (!helperSettingsReady || !path || !String(text).trim() || String(text).length > 4096 || replyProc.running) return
+    var row = rowFor(key)
+    if (!row) return false
+    var path = String(row.replyPath || "")
+    if (!helperSettingsReady || !path || !String(text).trim() || String(text).length > 4096 || replyProc.running) return false
     replyProc.running = false
     replyProc.replyKey = key
-    replyProc.command = [kdeBin, "reply", path, String(text), String(toasts.get(at).source), String(toasts.get(at).bodyLine)]
+    replyProc.command = [kdeBin, "reply", path, String(text), String(row.source), String(row.bodyLine)]
     replyProc.running = true
-
+    return true
   }
 
   // ------------------------------------------------------------- offers
@@ -1886,6 +1917,153 @@ Item {
     }
   }
 
+  // ------------------------------------------------------------- the inbox
+  //
+  // For a desktop that shows notifications somewhere other than omapager's
+  // cards - a console, a bar - while omapager stays the daemon: `popups`
+  // decides which notifications get a card ("all", or only "critical" ones),
+  // the rest are *kept*: admitted, recorded and actionable like any card,
+  // but never drawn and never expired, until something dismisses them
+  // through `omapager.inbox` (below, with the shape in Inbox.js). Changes go
+  // out as one-line Hyprland events, `omapager>>arrived,<key>`,
+  // `left,<key>,<reason>`, `changed`, `ready`: nudges with no text in them,
+  // and only once something has asked for the list.
+  //
+  // `popupsSetting` is the widget's `popups`; `popupsOverride` is the IPC's,
+  // for this session only - a program that takes the cards over says so each
+  // time it starts, so nothing stays hidden after it has gone.
+  property string popupsSetting: "all"
+  property string popupsOverride: ""
+  readonly property string popups: Inbox.popupsMode(popupsOverride || popupsSetting)
+  onPopupsChanged: applyPopups()
+  property var kept: ({})             // key -> row
+  property int keptRevision: 0
+  // Never expiring is not the same as unbounded: past this, the oldest kept
+  // row goes to history as expired, before the live reservation cap (100)
+  // starts refusing new arrivals outright.
+  readonly property int keptLimit: 50
+  property bool listened: false
+
+  function popsUp(row) { return Inbox.popsUp(popups, row ? row.urgency : 1) }
+
+  // A row by key, on screen or kept.
+  function rowFor(key) {
+    var at = rowIndexFor(key)
+    if (at >= 0) return toasts.get(at)
+    return kept[key] || null
+  }
+
+  function setRowField(key, field, value) {
+    var at = rowIndexFor(key)
+    if (at >= 0) { toasts.setProperty(at, field, value); return }
+    if (!kept[key]) return
+    kept[key][field] = value
+    keptRevision += 1
+  }
+
+  function keepRow(row) {
+    var key = String(row.key || "")
+    var pending = liveKeys[key]
+    if (!pending) return
+    pending.row = null
+    if (pending.held) {
+      pending.held = false
+      held = held.filter(function(heldKey) { return heldKey !== key })
+    }
+    var next = {}
+    for (var k in kept) next[k] = kept[k]
+    next[key] = row
+    kept = next
+    keptRevision += 1
+    var keys = Object.keys(kept)
+    if (keys.length <= keptLimit) return
+    keys.sort(function(a, b) { return Number(kept[a].ts || 0) - Number(kept[b].ts || 0) })
+    for (var i = 0; i < keys.length - keptLimit; i++) finishClose(keys[i], "expired")
+  }
+
+  function dropKept(key) {
+    if (!kept[key]) return false
+    var next = {}
+    for (var k in kept) if (k !== key) next[k] = kept[k]
+    kept = next
+    keptRevision += 1
+    return true
+  }
+
+  // Switching to critical sweeps the cards already up into the inbox (their
+  // exit plays, nothing closes); switching back hands what was kept to the
+  // cards, oldest first so the newest lands in front.
+  function applyPopups() {
+    var keys = [], i
+    if (popups === "critical") {
+      for (i = 0; i < toasts.count; i++) {
+        var row = toasts.get(i)
+        if (!popsUp(row) && !leaving[row.key]) keys.push(String(row.key))
+      }
+      for (i = 0; i < keys.length; i++) closeToast(keys[i], "kept")
+      var waiting = held.slice()
+      for (i = 0; i < waiting.length; i++) {
+        var pending = liveKeys[waiting[i]]
+        if (pending && pending.row && !popsUp(pending.row)) keepRow(pending.row)
+      }
+    } else {
+      keys = Object.keys(kept)
+      keys.sort(function(a, b) { return Number(kept[a].ts || 0) - Number(kept[b].ts || 0) })
+      for (i = 0; i < keys.length; i++) {
+        var back = kept[keys[i]]
+        dropKept(keys[i])
+        showRow(back)
+      }
+    }
+    announce("changed")
+  }
+
+  function announce(kind, key, reason) {
+    if (kind !== "ready" && !listened) return
+    var lua = Inbox.dispatchFor(Inbox.eventLine(kind, key, reason))
+    if (lua) Quickshell.execDetached(["hyprctl", "dispatch", lua])
+  }
+
+  // Everything omapager holds, on screen and kept, grouped by source.
+  function inboxListing() {
+    var entries = [], i
+    for (i = 0; i < toasts.count; i++) {
+      var row = toasts.get(i)
+      // A card being swept into the inbox is already kept, as far as anyone
+      // reading the list is concerned; any other leaving card is gone.
+      if (leaving[row.key] && leaving[row.key] !== "kept") continue
+      entries.push(Inbox.entry(row, actionsOf(String(row.key), refsRevision), leaving[row.key] ? "kept" : "screen"))
+    }
+    for (var key in kept) entries.push(Inbox.entry(kept[key], actionsOf(key, refsRevision), "kept"))
+    return Inbox.listing({
+      popups: popups, dnd: doNotDisturb, globalSnoozeUntil: globalSnoozeUntil,
+      snoozed: liveSnoozes(), sharingActive: sharingActive, sharingOfferPending: sharingOfferPending,
+      entries: entries, snoozedUntil: function(groupKey) { return snoozedUntil(groupKey) }
+    })
+  }
+
+  // The keys of every row from one source, on screen (not already leaving)
+  // or kept.
+  function keysOfGroup(groupKey) {
+    var keys = [], wanted = String(groupKey || "")
+    for (var i = 0; i < toasts.count; i++) {
+      var row = toasts.get(i)
+      if (Layout.groupKeyFor(row) === wanted && !leaving[row.key]) keys.push(String(row.key))
+    }
+    for (var key in kept) if (Layout.groupKeyFor(kept[key]) === wanted) keys.push(key)
+    return keys
+  }
+  // (the inbox's functions end here)
+
+  // Snoozes, silencing and the sharing offer change what a list would say.
+  Timer { id: changedSoon; interval: 150; onTriggered: service.announce("changed") }
+  Connections {
+    target: service
+    function onSnoozeRevisionChanged() { changedSoon.restart() }
+    function onDoNotDisturbChanged() { changedSoon.restart() }
+    function onSharingOfferPendingChanged() { changedSoon.restart() }
+  }
+
   // The bar makes one indicator per monitor, and rebuilds every one of them
   // when the layout changes - the new ones before the old ones are gone. Each
   // carries the panel's IPC handler, so `omapager.panel` needs exactly one
@@ -1915,7 +2093,10 @@ Item {
       if (!reserveLive(row.key)) break
       // Live image handles died with the old shell; restore a durable icon.
       if (!replay) wantIcon(row)
-      showRow(row)
+      // A replay is asked for, so it is drawn; a restart's leftovers follow
+      // the popups mode like any arrival.
+      if (!replay && !popsUp(row)) keepRow(row)
+      else showRow(row)
     }
   }
 
@@ -1928,6 +2109,9 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         service.restoreRows(Store.parseList(text), false)
+        // Up, with whatever survived the restart in place: anyone showing the
+        // inbox reads it again now.
+        service.announce("ready")
       }
     }
   }
@@ -2016,6 +2200,7 @@ Item {
           return (service.displayMode === "all" && !service.awayFrom(name)) || name === service.targetDisplayName
         }),
         fullscreenOverlay: service.fullscreenOverlay, surfaces: service.surfaceStates(),
+        popups: service.popups, kept: Object.keys(service.kept).length,
         avoidedDisplays: service.displayNames.filter(function(n) { return service.awayFrom(n) })})
     }
     function clear(): string { service.clearAll("cleared"); return "ok" }
@@ -2148,6 +2333,110 @@ Item {
       if (mode === "all" || mode === "source")
         service.commit(function() { service.stacking = mode })
       return service.stacking
+    }
+  }
+
+  // ---------------------------------------------------- the inbox, by key
+  //
+  // For a program showing notifications itself (the inbox section above).
+  // Everything acts on a notification by its key, or on a source by its group
+  // key, both as `list` gives them - never on "the front card", which is a
+  // thing only the screen has. Any call here also turns the events on.
+  IpcHandler {
+    target: "omapager.inbox"
+
+    // {schema, popups, dnd, globalSnoozeUntil, snoozed, sharing, groups:
+    // [{key, label, app, count, at, snoozedUntil, items: [{key, group, app,
+    // source, summary, body, at, urgency, place, restored, repliable,
+    // replyTo, actions: [{id, text}]}]}]}, newest first (Inbox.js).
+    function list(): string {
+      service.listened = true
+      return JSON.stringify(service.inboxListing())
+    }
+
+    function dismiss(key: string): string {
+      service.listened = true
+      var k = String(key || "")
+      if (!service.rowFor(k)) return "none"
+      service.closeToast(k, "dismissed")
+      return "ok"
+    }
+
+    // Everything from one source, on screen and kept. Answers how many.
+    function dismissSource(group: string): string {
+      service.listened = true
+      var keys = service.keysOfGroup(group)
+      for (var i = 0; i < keys.length; i++) service.closeToast(keys[i], "dismissed")
+      return String(keys.length)
+    }
+
+    // One of the sender's actions by its id, as `list` gives them; no id (or
+    // "open") does what a click on the card does.
+    function act(key: string, action: string): string {
+      service.listened = true
+      var k = String(key || ""), id = String(action || "")
+      if (!service.rowFor(k)) return "none"
+      if (!id || id === "open") { service.activate(k); return "ok" }
+      var available = service.actionsOf(k, service.refsRevision)
+      for (var i = 0; i < available.length; i++) {
+        if (available[i].id !== id) continue
+        service.invokeAction(k, id)
+        return "ok"
+      }
+      return "no such action"
+    }
+
+    // Answer a repliable notification (`repliable` in `list`).
+    function reply(key: string, text: string): string {
+      service.listened = true
+      var row = service.rowFor(String(key || ""))
+      if (!row) return "none"
+      if (!String(row.replyPath || "")) return "not repliable"
+      if (!String(text || "").trim()) return "empty"
+      return service.sendReply(String(key), String(text)) ? "sent" : "busy"
+    }
+
+    // Snooze one source for so many minutes from now (60 when not a number).
+    // Answers when it wakes, in epoch seconds.
+    function snooze(group: string, minutes: string): string {
+      service.listened = true
+      var g = String(group || "")
+      if (!g) return "none"
+      var keys = service.keysOfGroup(g), row = keys.length ? service.rowFor(keys[0]) : null
+      var label = row ? String(row.source || row.app || g) : g
+      var mins = Number(minutes) > 0 ? Number(minutes) : 60
+      var until = service.snoozeSource(g, label, mins * 60, true)
+      return until ? String(Math.round(until)) : "no"
+    }
+
+    function wake(group: string): string {
+      service.listened = true
+      if (!String(group || "")) return "none"
+      service.unsnooze(String(group))
+      return "ok"
+    }
+
+    // "critical": cards only for critical notifications, the rest kept;
+    // "all": every card again; "" or "default": back to the widget's setting.
+    // For this session only. Answers the mode now in force.
+    function popups(mode: string): string {
+      service.listened = true
+      var m = String(mode || "").trim().toLowerCase()
+      if (m === "" || m === "default") service.popupsOverride = ""
+      else if (Inbox.POPUPS.indexOf(m) >= 0) service.popupsOverride = m
+      return service.popups
+    }
+
+    // The screen-sharing offer: "30", "60" or "240" snoozes everything for
+    // that long, "dismiss" declines it - what the panel's offer does.
+    function sharing(choice: string): string {
+      service.listened = true
+      if (!service.sharingOfferPending) return "none"
+      var seconds = Inbox.sharingSeconds(choice)
+      if (seconds < 0) service.dismissSharingOffer()
+      else if (seconds > 0) service.snoozeSharingOffer(seconds)
+      else return "refused"
+      return "ok"
     }
   }
 
