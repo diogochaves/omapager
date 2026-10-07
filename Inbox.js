@@ -191,3 +191,51 @@ function sharingSeconds(choice) {
   var minutes = Number(c)
   return SHARING_MINUTES.indexOf(minutes) >= 0 ? minutes * 60 : 0
 }
+
+// ---- the override's lease --------------------------------------------------
+//
+// `popups` said over the IPC holds for the session. A program that takes the
+// cards over says it again each time the shell starts, but only once it has
+// started itself: after omapager has put back the cards a restart left, which
+// were then drawn for the second in between. So an override is also written
+// down as a lease, `{mode, until}`, renewed while the inbox is being listed.
+// A start that finds one still running applies its mode before the leftovers
+// come back, and keeps it only until `until` unless the mode is said again. A
+// program that has gone stops renewing it, so the cards come back within
+// LEASE_SECONDS: nothing stays hidden behind it.
+var LEASE_SECONDS = 90
+// Renewed by a listing once it has run this long, so a program listing every
+// 30 s writes it about once a minute and a restart finds at least half a
+// minute left on it.
+var LEASE_RENEW_AFTER = 45
+
+// The lease for a mode said at `now` (epoch seconds), or null for anything
+// that is not an override ("default", "", the unknown).
+function lease(mode, now) {
+  var m = String(mode === undefined || mode === null ? "" : mode).trim().toLowerCase()
+  var t = Number(now)
+  if (POPUPS.indexOf(m) < 0 || !isFinite(t)) return null
+  return { mode: m, until: Math.floor(t) + LEASE_SECONDS }
+}
+
+// The lease a start finds (the store's JSON text, or the object) if it still
+// runs at `now`: {mode, until}, else null. One that ends further away than a
+// lease ever lasts (a clock that went back, a hand-written file) is not one.
+function leaseFound(value, now) {
+  var v = value
+  if (typeof v === "string") {
+    try { v = JSON.parse(v || "null") } catch (e) { return null }
+  }
+  if (!v || typeof v !== "object") return null
+  var t = Number(now), until = Number(v.until)
+  if (typeof v.mode !== "string" || POPUPS.indexOf(v.mode) < 0) return null
+  if (!isFinite(t) || !isFinite(until) || until <= t || until > t + LEASE_SECONDS) return null
+  return { mode: v.mode, until: until }
+}
+
+// Whether a listing at `now` writes the lease again (the one written ends at
+// `until`; 0 for none).
+function leaseDue(until, now) {
+  var u = Number(until) || 0, t = Number(now)
+  return !isFinite(t) || u - t <= LEASE_SECONDS - LEASE_RENEW_AFTER
+}

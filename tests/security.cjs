@@ -910,6 +910,87 @@ for (const u of ['https://example.com/', 'https://sub.example.co.uk/', 'https://
   assert.ok(s.toasts.rows.some(row => row.summary === 'Replayed'));
 }
 
+{ // The popups override's lease (omarchy-console#81): read before the
+  // restore, so a restart's leftovers are kept, not drawn, while a program
+  // that took the cards over has yet to say so again; dropped when it runs
+  // out unsaid; written only for an override.
+  const lease = () => {
+    const s = newCapacityScope();
+    Object.defineProperty(s, 'popups', { get: () => s.Inbox.popupsMode(s.popupsOverride || s.popupsSetting) });
+    Object.assign(s, { popupsSetting: 'all', popupsOverride: '', popupsLeaseUntil: 0, popupsLeased: false,
+      popupsSaid: false, popupsLeaseRead: false, restoreProc: { running: false }, writes: [],
+      popupsLeaseEnd: { interval: 0, on: false, restart() { this.on = true; }, stop() { this.on = false; } } });
+    s.Store.write = (proc, bin, verb, payload) => s.writes.push([verb, JSON.parse(JSON.stringify(payload))]);
+    return s;
+  };
+  const now = Date.now() / 1000;
+  const running = JSON.stringify({ mode: 'critical', until: Math.floor(now) + 60 });
+
+  let s = lease();
+  s.restorePopupsLease(running);
+  assert.equal(s.popups, 'critical');
+  assert.equal(s.popupsLeased, true);
+  assert.equal(s.restoreProc.running, true, 'then the restore');
+  assert.ok(s.popupsLeaseEnd.on && s.popupsLeaseEnd.interval > 55000 && s.popupsLeaseEnd.interval <= 60000);
+  s.restoreRows([{ key: 'left1', summary: 'Left over' }], false);
+  s.drainCallLater();
+  assert.deepEqual(Object.keys(s.kept), ['left1'], 'kept, not drawn');
+  assert.equal(s.toasts.rows.length, 0);
+  s.restorePopupsLease('{}');
+  assert.equal(s.popups, 'critical', 'read once');
+  s.renewPopupsLease();
+  assert.deepEqual(s.writes, [], 'a listing does not renew a lease nobody has said again');
+  // Nobody said it again: it runs out, and the cards come back.
+  s.popupsLeaseEnded();
+  s.applyPopups();
+  s.drainCallLater();
+  assert.equal(s.popups, 'all');
+  assert.deepEqual(s.toasts.rows.map(row => row.key), ['left1']);
+  assert.deepEqual(s.writes, [['popups-save', {}]], 'the file goes');
+
+  // Said again in time: the session's, renewed by listing once half spent.
+  s = lease();
+  s.restorePopupsLease(running);
+  s.sayPopups('critical');
+  assert.equal(s.popupsLeased, false);
+  assert.equal(s.popupsLeaseEnd.on, false);
+  s.popupsLeaseEnded();
+  assert.equal(s.popups, 'critical', 'said: no longer the lease that runs out');
+  assert.equal(s.writes.length, 1);
+  assert.equal(s.writes[0][1].mode, 'critical');
+  assert.ok(s.writes[0][1].until >= Math.floor(now) + 90);
+  s.renewPopupsLease();
+  assert.equal(s.writes.length, 1, 'just written');
+  s.popupsLeaseUntil = Math.floor(now) + 40;
+  s.renewPopupsLease();
+  assert.equal(s.writes.length, 2, 'half spent: written again');
+  s.sayPopups('nonsense');
+  assert.equal(s.popups, 'critical', 'not a mode: nothing changes');
+  assert.equal(s.writes.length, 2);
+  s.sayPopups('default');
+  assert.equal(s.popups, 'all');
+  assert.deepEqual(s.writes[2], ['popups-save', {}], 'default removes it');
+  s.renewPopupsLease();
+  assert.equal(s.writes.length, 3, "never written for the widget's own setting");
+
+  // Said before the file was read: that one holds.
+  s = lease();
+  s.sayPopups('default');
+  s.restorePopupsLease(running);
+  assert.equal(s.popups, 'all');
+  assert.equal(s.restoreProc.running, true);
+
+  // A lease that ran out, or none: the widget's setting; a stale file goes.
+  s = lease();
+  s.restorePopupsLease(JSON.stringify({ mode: 'critical', until: Math.floor(now) - 5 }));
+  assert.equal(s.popups, 'all');
+  assert.equal(s.restoreProc.running, true);
+  assert.deepEqual(s.writes, [['popups-save', {}]]);
+  s = lease();
+  s.restorePopupsLease('{}');
+  assert.deepEqual(s.writes, [], 'nothing on file: nothing written');
+}
+
 { // Events: nothing until something has listed; then one-line nudges with a
   // key and a reason, never the text.
   const s = newCapacityScope();

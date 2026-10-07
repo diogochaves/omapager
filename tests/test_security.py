@@ -74,6 +74,18 @@ class Storage(unittest.TestCase):
         self.assertEqual(self.run_store('policy',payload={'historyHours':0}).returncode,0)
         self.run_store('close','n1','done')
         self.assertEqual(json.loads(self.run_store('history').stdout),[])
+    def test_popups_lease(self):
+        path=self.home/'.local/state/omarchy/omapager/popups.json'
+        self.assertEqual(json.loads(self.run_store('popups').stdout),{})
+        lease={'mode':'critical','until':1090}
+        self.assertEqual(self.run_store('popups-save',payload={**lease,'extra':'x'}).returncode,0)
+        self.assertEqual(json.loads(self.run_store('popups').stdout),lease,'only the lease is kept')
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        for other in ({},{'mode':'none','until':1},{'mode':'critical','until':'soon'}):
+            self.run_store('popups-save',payload=lease)
+            self.assertEqual(self.run_store('popups-save',payload=other).returncode,0)
+            self.assertFalse(path.exists(),other)
+        self.assertEqual(self.run_store('popups-save',payload={}).returncode,0,'nothing to remove')
     def test_symlink_and_oversize(self):
         self.run_store('restore')
         victim=self.home/'victim';victim.write_text('untouched')

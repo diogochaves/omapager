@@ -82,4 +82,33 @@ for (const [v, want] of [['tomorrow', 'tomorrow'], [' Tomorrow ', 'tomorrow'], [
 for (const [v, want] of [[undefined, 8], [null, 8], ['', 8], [0, 0], ['0', 0], ['soon', 8], [NaN, 8], [23, 23], [24, 8], [-1, 8], ['9', 9], [7.9, 7]])
   assert.equal(I.wakeHour(v), want, JSON.stringify(v));
 
+// The override's lease: written for a mode, found by a start while it runs,
+// renewed by a listing once it is half spent.
+assert.equal(I.LEASE_SECONDS, 90);
+assert.deepEqual(plain(I.lease('critical', 1000.7)), { mode: 'critical', until: 1090 });
+assert.deepEqual(plain(I.lease(' ALL ', 1000)), { mode: 'all', until: 1090 });
+for (const m of ['default', '', null, undefined, 'none'])
+  assert.equal(I.lease(m, 1000), null, 'no lease for ' + JSON.stringify(m));
+assert.equal(I.lease('critical', NaN), null);
+const found = I.leaseFound('{"mode":"critical","until":1090}', 1000);
+assert.deepEqual(plain(found), { mode: 'critical', until: 1090 });
+assert.deepEqual(plain(I.leaseFound({ mode: 'all', until: 1001 }, 1000)), { mode: 'all', until: 1001 }, 'an object too');
+for (const [v, why] of [
+  ['{"mode":"critical","until":1000}', 'ran out at now'],
+  ['{"mode":"critical","until":900}', 'ran out'],
+  ['{"mode":"critical","until":1091}', 'further away than a lease lasts'],
+  ['{"mode":"CRITICAL","until":1050}', 'written by us, so exact'],
+  ['{"mode":"none","until":1050}', 'not a mode'],
+  ['{"mode":"critical"}', 'no end'],
+  ['{"mode":"critical","until":"soon"}', 'no end'],
+  ['{}', 'empty'], ['', 'nothing'], ['null', 'null'], ['not json', 'not json'], ['[1]', 'not an object'],
+  [null, 'nothing'],
+]) assert.equal(I.leaseFound(v, 1000), null, why);
+assert.equal(I.leaseFound('{"mode":"critical","until":1090}', NaN), null, 'no clock, no lease');
+assert.equal(I.leaseDue(0, 1000), true, 'none written');
+assert.equal(I.leaseDue(1090, 1000), false, 'just written');
+assert.equal(I.leaseDue(1090, 1030), false, '30 s on: a listing every 30 s writes it every other time');
+assert.equal(I.leaseDue(1090, 1045), true, 'half spent');
+assert.equal(I.leaseDue(1090, 2000), true, 'ran out');
+
 console.log('inbox: passed');

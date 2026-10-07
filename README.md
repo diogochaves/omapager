@@ -327,7 +327,10 @@ setting, or `omapager.inbox popups critical` for the session), only critical
 notifications get a card; the rest are *kept*: recorded and actionable like
 any card, never drawn, never expired (the oldest past 50 go to history),
 until they are dismissed. Switching back to `all` turns what was kept into
-cards. `omapager.inbox` works by key, on cards and kept notifications alike:
+cards. The IPC's `popups` also holds across a shell start, as a 90-second
+lease that `list` renews: the cards a restart leaves are kept until the
+program says it again, and come back if it never does (it has gone).
+`omapager.inbox` works by key, on cards and kept notifications alike:
 
 ```
 omarchy-shell omapager.inbox list               everything held, grouped by source, as JSON

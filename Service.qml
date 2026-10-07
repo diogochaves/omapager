@@ -1957,12 +1957,20 @@ Item {
   // and only once something has asked for the list.
   //
   // `popupsSetting` is the widget's `popups`; `popupsOverride` is the IPC's,
-  // for this session only - a program that takes the cards over says so each
-  // time it starts, so nothing stays hidden after it has gone.
+  // for this session - a program that takes the cards over says so each time
+  // it starts, so nothing stays hidden after it has gone. Across a shell start
+  // it holds as a lease (Inbox.js, the functions below): on file while it is
+  // in force and renewed by listing, read before the leftovers are restored,
+  // and dropped when it runs out without the mode being said again.
   property string popupsSetting: "all"
   property string popupsOverride: ""
   readonly property string popups: Inbox.popupsMode(popupsOverride || popupsSetting)
   onPopupsChanged: applyPopups()
+  property real popupsLeaseUntil: 0   // when the lease on file ends, epoch seconds; 0 none
+  property bool popupsLeased: false   // the override came from the file and was not said since
+  property bool popupsSaid: false     // said over the IPC this session
+  property bool popupsLeaseRead: false
+  Timer { id: popupsLeaseEnd; onTriggered: service.popupsLeaseEnded() }
   property var kept: ({})             // key -> row
   property int keptRevision: 0
   // Never expiring is not the same as unbounded: past this, the oldest kept
@@ -2080,6 +2088,66 @@ Item {
     for (var key in kept) if (Layout.groupKeyFor(kept[key]) === wanted) keys.push(key)
     return keys
   }
+
+  // The override, said over the IPC: in force for the session, and on file as
+  // a lease. "default" (or "") hands the cards back to the widget's setting
+  // and removes it; anything that is not a mode changes nothing.
+  function sayPopups(mode) {
+    var m = String(mode || "").trim().toLowerCase()
+    if (m !== "" && m !== "default" && Inbox.POPUPS.indexOf(m) < 0) return
+    popupsSaid = true
+    popupsLeased = false
+    popupsLeaseEnd.stop()
+    popupsOverride = m === "default" ? "" : m
+    writePopupsLease()
+  }
+
+  // The lease for the override in force; with none (the widget's own setting)
+  // the file goes, it is never written.
+  function writePopupsLease() {
+    var lease = popupsOverride !== "" ? Inbox.lease(popupsOverride, Date.now() / 1000) : null
+    popupsLeaseUntil = lease ? lease.until : 0
+    Store.write(storeProc, storeBin, "popups-save", lease || {})
+  }
+
+  // A listing renews the lease once it is half spent - not one a start found
+  // and nobody has said since: that one runs out.
+  function renewPopupsLease() {
+    if (popupsOverride === "" || popupsLeased) return
+    if (Inbox.leaseDue(popupsLeaseUntil, Date.now() / 1000)) writePopupsLease()
+  }
+
+  // At start, before the leftovers come back (the store's `popups`): a lease
+  // still running puts its mode in force until it ends, so the cards a
+  // restart left are kept rather than drawn for the moment before the program
+  // that asked says it again. Then the restore.
+  function restorePopupsLease(text) {
+    if (popupsLeaseRead) return
+    popupsLeaseRead = true
+    var lease = Inbox.leaseFound(text, Date.now() / 1000)
+    var stale = String(text || "").trim()
+    if (popupsSaid) {
+      // Said before the file was read: that is the one in force.
+    } else if (lease) {
+      popupsLeased = true
+      popupsLeaseUntil = lease.until
+      popupsOverride = lease.mode
+      popupsLeaseEnd.interval = Math.max(1, Math.ceil(lease.until * 1000 - Date.now()))
+      popupsLeaseEnd.restart()
+    } else if (stale !== "" && stale !== "{}") {
+      Store.write(storeProc, storeBin, "popups-save", {})
+    }
+    restoreProc.running = true
+  }
+
+  // A lease found at start that nobody renewed: the cards are the widget's
+  // again, the kept ones drawn (applyPopups).
+  function popupsLeaseEnded() {
+    if (!popupsLeased) return
+    popupsLeased = false
+    popupsOverride = ""
+    writePopupsLease()
+  }
   // (the inbox's functions end here)
 
   // Snoozes, silencing and the sharing offer change what a list would say.
@@ -2143,6 +2211,20 @@ Item {
     }
   }
 
+  // The popups lease, read first: the restore follows it (restorePopupsLease).
+  // A store that fails still restores, with the widget's setting.
+  Process {
+    id: popupsLeaseProc
+    environment: service.helperEnvironment
+    running: false
+    command: [service.storeBin, "popups"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: service.restorePopupsLease(text)
+    }
+    onExited: function(code) { if (code !== 0) service.restorePopupsLease("") }
+  }
+
   Process {
     id: quietRestoreProc
     environment: service.helperEnvironment
@@ -2182,7 +2264,7 @@ Item {
   // a stored requireSandbox=true could be bypassed during service startup.
   onHelperSettingsReadyChanged: if (helperSettingsReady) Qt.callLater(function() {
     sandboxProbe.running = true
-    restoreProc.running = true
+    popupsLeaseProc.running = true   // then the restore
     quietRestoreProc.running = true
     tidyProc.running = true
     Store._pump(storeProc)
@@ -2383,6 +2465,7 @@ Item {
     // replyTo, actions: [{id, text}]}]}]}, newest first (Inbox.js).
     function list(): string {
       service.listened = true
+      service.renewPopupsLease()
       return JSON.stringify(service.inboxListing())
     }
 
@@ -2454,12 +2537,11 @@ Item {
 
     // "critical": cards only for critical notifications, the rest kept;
     // "all": every card again; "" or "default": back to the widget's setting.
-    // For this session only. Answers the mode now in force.
+    // For this session, and across a shell start for as long as its lease
+    // runs (renewed by `list`; Inbox.js). Answers the mode now in force.
     function popups(mode: string): string {
       service.listened = true
-      var m = String(mode || "").trim().toLowerCase()
-      if (m === "" || m === "default") service.popupsOverride = ""
-      else if (Inbox.POPUPS.indexOf(m) >= 0) service.popupsOverride = m
+      service.sayPopups(mode)
       return service.popups
     }
 

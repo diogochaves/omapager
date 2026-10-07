@@ -9,6 +9,8 @@
 #   tidy             drop history past its age, and icons nothing has wanted
 #   quiet            print the quiet state: snoozed sources, and silencing
 #   quiet-save       read the quiet state as JSON on stdin
+#   popups           print the popups override's lease, {} for none
+#   popups-save      read the lease as JSON on stdin; anything else removes it
 #   held [N]         print the newest N that were never shown, newest first
 #   forget-all       empty the history
 #
@@ -31,6 +33,7 @@ HISTORY = os.path.join(ROOT, "history")
 ICONS = os.path.join(ROOT, "icons")
 QUIET = os.path.join(ROOT, "quiet.json")
 SNOOZES = os.path.join(ROOT, "snoozes.json")     # what quiet.json used to be
+POPUPS = os.path.join(ROOT, "popups.json")
 # What history is for: replaying the last few onto the screen, and showing what
 # a snooze or a silence held back. Both want the recent past, neither wants a
 # fortnight of it - and every entry is the text of a message somebody sent you,
@@ -292,6 +295,22 @@ def read_quiet():
     return {"snoozes": read_json(SNOOZES) or {}}
 
 
+def cmd_popups_save():
+    """The IPC's popups override, as a lease (Inbox.js): {mode, until}, so a
+    shell start can apply it before the leftovers come back. Anything that is
+    not one removes it: the override is gone, the widget's setting holds."""
+    value = input_json(sys.stdin)
+    mode, until = value.get("mode"), value.get("until")
+    if mode in ("all", "critical") and type(until) in (int, float):
+        write_json(POPUPS, {"mode": mode, "until": until})
+        return 0
+    try:
+        os.remove(POPUPS)
+    except FileNotFoundError:
+        pass
+    return 0
+
+
 def main():
     ensure()
     trim_history()
@@ -330,6 +349,11 @@ def main():
         return 0
     if verb == "quiet-save":
         return cmd_quiet_save()
+    if verb == "popups":
+        json.dump(read_json(POPUPS) or {}, sys.stdout, separators=(",", ":"))
+        return 0
+    if verb == "popups-save":
+        return cmd_popups_save()
     if verb == "tidy":
         return cmd_tidy()
     return 2
