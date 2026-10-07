@@ -73,12 +73,13 @@ assert.equal(I.sharingSeconds(''), 0);
 assert.deepEqual(plain(l.snooze), { choices: ['30', '60', '240', 'tomorrow'], wakeHour: 8 }, 'the defaults');
 assert.deepEqual(plain(I.listing({ snoozeChoices: ['15', 'tomorrow', '15', 'soon', '-5', 0], wakeHour: 7 }).snooze),
   { choices: ['15', 'tomorrow'], wakeHour: 7 }, 'cleaned, in order, once each');
+assert.equal(I.listing({ wakeHour: 0 }).snooze.wakeHour, 0, 'midnight is an hour, not a missing one');
 assert.deepEqual(plain(I.listing({ snoozeChoices: ['never'] }).snooze.choices), ['30', '60', '240', 'tomorrow'],
   'none left: the defaults, never an empty menu');
 for (const [v, want] of [['tomorrow', 'tomorrow'], [' Tomorrow ', 'tomorrow'], ['30', '30'], [45, '45'],
   ['060', '60'], ['0', ''], ['-30', ''], ['1.5', ''], ['30m', ''], ['', ''], [null, ''], ['99999', '']])
   assert.equal(I.snoozeChoice(v), want, JSON.stringify(v));
-for (const [v, want] of [[undefined, 8], [null, 8], ['', 8], [0, 0], [23, 23], [24, 8], [-1, 8], ['9', 9], [7.9, 7]])
+for (const [v, want] of [[undefined, 8], [null, 8], ['', 8], [0, 0], ['0', 0], ['soon', 8], [NaN, 8], [23, 23], [24, 8], [-1, 8], ['9', 9], [7.9, 7]])
   assert.equal(I.wakeHour(v), want, JSON.stringify(v));
 
 console.log('inbox: passed');

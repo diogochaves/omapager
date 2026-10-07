@@ -19,6 +19,8 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
+import "Inbox.js" as Inbox
+
 BarWidget {
   id: pager
   moduleName: "njpatel.omapager"
@@ -207,7 +209,8 @@ BarWidget {
     var codes = setting("codesBypassQuiet", null)
     if (codes !== null) service.setCodesBypassQuiet(codes !== false)
     service.smartRaise = setting("smartRaise", true) !== false
-    service.wakeHour = Number(setting("wakeHour", 8)) || 8
+    // Inbox.wakeHour, not `|| 8`: midnight (0) is an hour, not a missing one.
+    service.wakeHour = Inbox.wakeHour(setting("wakeHour", 8))
     service.sourceLimit = Number(setting("sourceLimit", 8)) || 8
     service.heldPerSource = Number(setting("heldPerSource", 10)) || 10
     // Empty means "none chosen", not "no snoozing" - fall back rather than
