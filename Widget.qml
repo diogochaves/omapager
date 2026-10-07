@@ -234,27 +234,19 @@ BarWidget {
   onServiceChanged: { Qt.callLater(applySettings); claimPanelIpc() }
   Component.onCompleted: { Qt.callLater(applySettings); claimPanelIpc() }
 
-  // One indicator per monitor, and the bar rebuilds them all on a layout
-  // edit, the new ones before the old are gone: only the first live one
-  // answers `omapager.panel`, and the next takes over when it goes (the
-  // service's panelOwner). Otherwise every rebuild logs a refused handler.
-  property var ownerService: null
-  property bool leavingPanelIpc: false
-  readonly property bool ownsPanelIpc: !leavingPanelIpc && service !== null && service.panelOwner === pager
+  // One indicator per monitor, rebuilt new-before-old on every bar layout
+  // change: only the service's panelOwner registers `omapager.panel`, and it
+  // unregisters before handing over, so no handler is ever refused.
+  property var ipcService: null
+  property bool ipcLeaving: false
   function claimPanelIpc() {
-    if (!service) return
-    ownerService = service
-    if (!service.panelOwner) service.panelOwner = pager
+    if (service && !ipcLeaving && !service.panelOwner) service.panelOwner = pager
+    if (service) ipcService = service
   }
-  Connections {
-    target: pager.service
-    function onPanelOwnerChanged() { if (pager.service && !pager.service.panelOwner) pager.claimPanelIpc() }
-  }
-  // Unregister before handing over: the handler object outlives this signal,
-  // and a successor registering while it is still there is refused.
+  Connections { target: pager.service; function onPanelOwnerChanged() { pager.claimPanelIpc() } }
   Component.onDestruction: {
-    leavingPanelIpc = true
-    if (ownerService && ownerService.panelOwner === pager) ownerService.panelOwner = null
+    ipcLeaving = true
+    if (ipcService && ipcService.panelOwner === pager) ipcService.panelOwner = null
   }
 
   // ------------------------------------------------------------- looks
@@ -428,7 +420,7 @@ BarWidget {
   // rather than `void` because this Qt's QML grammar rejects `void` outright.
   IpcHandler {
     target: "omapager.panel"
-    enabled: pager.ownsPanelIpc
+    enabled: !pager.ipcLeaving && !!pager.service && pager.service.panelOwner === pager
     function open(): string { pager.open(); return "open" }
     function openSettings(): string { pager.openSettings(); return "settings" }
     // Current notification status for scripts, without opening the panel.
